@@ -5,6 +5,9 @@
 #include <zephyr/drivers/uart.h>
 #include <zephyr/timing/timing.h>
 
+// 1. pisteen suoritus.
+// Tavoittelen kolmea pistettä, jotka teen myöhemmin
+
 
 // Config
 #define STACKSIZE 500
@@ -17,6 +20,11 @@ volatile int tila = 0;         // 0 = idle, 1 = red, 2 = yellow, 3 = green, 4 = 
 volatile int saved_tila = 0;   // State saved when pause (button 0) is pressed
 volatile int saved_tila5 = 0;  // State saved when flashing yellow (button 4) is pressed
 volatile int led_time_ms = 0;  // Global LED timing variable
+
+// Timing
+uint64_t red_task_ns = 0;
+uint64_t yellow_task_ns = 0;
+uint64_t green_task_ns = 0;
 
 // Led pin configurations
 static const struct gpio_dt_spec red = GPIO_DT_SPEC_GET(DT_ALIAS(led0), gpios);
@@ -187,7 +195,7 @@ int main(void)
 	timing_t end_time = timing_counter_get();
 	timing_stop();
     uint64_t timing_ns = timing_cycles_to_ns(timing_cycles_get(&start_time, &end_time));
-	printk("Initialization: %lld\n", timing_ns);
+	printk("Initialization: %u us\n", (uint32_t)(timing_ns / 1000));
 
 	// init state
 	tila = 1;
@@ -348,11 +356,11 @@ void red_led_task(void *, void *, void*)
 
 			k_sleep(K_SECONDS(1));
 
-			// measure task duration
+			// Measure task duration
 			timing_t red_end_time = timing_counter_get();
 			timing_stop();
-    		uint64_t timing_ns = timing_cycles_to_ns(timing_cycles_get(&red_start_time, &red_end_time));
-			printk("Red task: %lld\n", timing_ns);
+			red_task_ns = timing_cycles_to_ns(timing_cycles_get(&red_start_time, &red_end_time));
+			printk("Red task: %u us\n", (uint32_t)(red_task_ns / 1000));
 
 			if (tila != 4) tila = 2;
 
@@ -396,11 +404,10 @@ void yellow_led_task(void *, void *, void*)
 
 			k_sleep(K_SECONDS(1));
 
-			// measure task duration
 			timing_t yellow_end_time = timing_counter_get();
 			timing_stop();
-    		uint64_t timing_ns = timing_cycles_to_ns(timing_cycles_get(&yellow_start_time, &yellow_end_time));
-			printk("Yellow task: %lld\n", timing_ns);
+			yellow_task_ns = timing_cycles_to_ns(timing_cycles_get(&yellow_start_time, &yellow_end_time));
+			printk("Yellow task: %u us\n", (uint32_t)(yellow_task_ns / 1000));
 
 			if (tila != 4) tila = 3;
 
@@ -444,11 +451,14 @@ void green_led_task(void *, void *, void*)
 
 			k_sleep(K_SECONDS(1));
 
-			// measure task duration
 			timing_t green_end_time = timing_counter_get();
 			timing_stop();
-    		uint64_t timing_ns = timing_cycles_to_ns(timing_cycles_get(&green_start_time, &green_end_time));
-			printk("Green task: %lld\n", timing_ns);
+			green_task_ns = timing_cycles_to_ns(timing_cycles_get(&green_start_time, &green_end_time));
+			printk("Green task: %u us\n", (uint32_t)(green_task_ns / 1000));
+
+			// Measure entire sequence
+			uint64_t total_ns = red_task_ns + yellow_task_ns + green_task_ns;
+			printk("Sequence total: %u us\n", (uint32_t)(total_ns / 1000));
 
 			if (tila != 4) tila = 1;
 
