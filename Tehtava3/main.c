@@ -4,16 +4,28 @@
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/drivers/uart.h>
 #include <zephyr/timing/timing.h>
+#include <assert.h>
 
-// 1. pisteen suoritus.
-// Tavoittelen kolmea pistettä, jotka teen myöhemmin
-
+// Tavoite 3 pistettä suorituksista:
+// Ajoitukset liikennevaloihin
+// Debugin asetus päälle / pois
+// Koodiin toiminnallisuuden tarkistuksia
 
 // Config
-#define STACKSIZE 500
+#define STACKSIZE 1024
 #define PRIORITY 5
 #define TRANSITION_PAUSE_MS 100   // Pause between steps when replaying a sequence
 #define MAX_SEQUENCE 20           // Maximum number of commands in sequence
+
+// Debug output can be enabled/disabled through UART with the D command
+static volatile bool debug_enabled = true;
+
+// Print a debug message only when debug logging is enabled
+#define DEBUG_PRINT(...) do { \
+    if (debug_enabled) { \
+        printk(__VA_ARGS__); \
+    } \
+} while (0)
 
 // State
 volatile int tila = 0;         // 0 = idle, 1 = red, 2 = yellow, 3 = green, 4 = pause, 5 = flashing yellow 
@@ -106,34 +118,36 @@ int init_button(void);
 // Button handlers
 void button_0_handler(const struct device *dev, struct gpio_callback *cb, uint32_t pins)
 {
-	printk("Button 0 pressed\n");
+	// Check that program state is valid
+	assert(tila >= 0 && tila <= 5);
+	DEBUG_PRINT("Button 0 pressed\n");
 	if (tila == 4) {
 		tila = saved_tila;
-		printk("Pause stopped, returning to state %d\n", tila);
+		DEBUG_PRINT("Pause stopped, returning to state %d\n", tila);
 	} else {
 		saved_tila = tila;
 		tila = 4;
-		printk("Pause started, saved state %d\n", saved_tila);
+		DEBUG_PRINT("Pause started, saved state %d\n", saved_tila);
 	}
 }
 
 void button_1_handler(const struct device *dev, struct gpio_callback *cb, uint32_t pins)
 {
 	if (tila != 4) {
-		printk("Button 1 ignored (not in pause)\n");
+		DEBUG_PRINT("Button 1 ignored (not in pause)\n");
 		return;
 	}
-	printk("Button 1 pressed (red toggle)\n");
+	DEBUG_PRINT("Button 1 pressed (red toggle)\n");
 	gpio_pin_toggle_dt(&red);
 }
 
 void button_2_handler(const struct device *dev, struct gpio_callback *cb, uint32_t pins)
 {
 	if (tila != 4) {
-		printk("Button 2 ignored (not in pause)\n");
+		DEBUG_PRINT("Button 2 ignored (not in pause)\n");
 		return;
 	}
-	printk("Button 2 pressed (yellow toggle)\n");
+	DEBUG_PRINT("Button 2 pressed (yellow toggle)\n");
 	gpio_pin_toggle_dt(&red);
 	gpio_pin_toggle_dt(&green);
 }
@@ -141,10 +155,10 @@ void button_2_handler(const struct device *dev, struct gpio_callback *cb, uint32
 void button_3_handler(const struct device *dev, struct gpio_callback *cb, uint32_t pins)
 {
 	if (tila != 4) {
-		printk("Button 3 ignored (not in pause)\n");
+		DEBUG_PRINT("Button 3 ignored (not in pause)\n");
 		return;
 	}
-	printk("Button 3 pressed (green toggle)\n");
+	DEBUG_PRINT("Button 3 pressed (green toggle)\n");
 	gpio_pin_toggle_dt(&green);
 }
 
@@ -154,16 +168,16 @@ void button_4_handler(const struct device *dev, struct gpio_callback *cb, uint32
 		gpio_pin_set_dt(&red, 0);
 		gpio_pin_set_dt(&green, 0);
 		tila = saved_tila5;
-		printk("Blink yellow stopped, returning to state %d\n", tila);
+		DEBUG_PRINT("Blink yellow stopped, returning to state %d\n", tila);
 		return;
 	}
 	if (tila != 4) {
-		printk("Button 4 ignored (not in pause)\n");
+		DEBUG_PRINT("Button 4 ignored (not in pause)\n");
 		return;
 	}
 	saved_tila5 = tila;
 	tila = 5;
-	printk("Blink yellow started, saved state %d\n", saved_tila5);
+	DEBUG_PRINT("Blink yellow started, saved state %d\n", saved_tila5);
 }
 
 // Main program
@@ -340,27 +354,25 @@ int init_led(void)
 // Task to handle red LED
 void red_led_task(void *, void *, void*)
 {
-	printk("Red led thread started\n");
+	DEBUG_PRINT("Red led thread started\n");
 	while (true) {
 		if (tila == 1) {
 			timing_start();
 			timing_t red_start_time = timing_counter_get();
 
 			gpio_pin_set_dt(&red, 1);
-			printk("Red on\n");
-
+			DEBUG_PRINT("Red on\n");
 			k_sleep(K_SECONDS(1));
 
 			gpio_pin_set_dt(&red, 0);
-			printk("Red off\n");
-
+			DEBUG_PRINT("Red off\n");
 			k_sleep(K_SECONDS(1));
 
 			// Measure task duration
 			timing_t red_end_time = timing_counter_get();
 			timing_stop();
 			red_task_ns = timing_cycles_to_ns(timing_cycles_get(&red_start_time, &red_end_time));
-			printk("Red task: %u us\n", (uint32_t)(red_task_ns / 1000));
+			DEBUG_PRINT("Red task: %u us\n", (uint32_t)(red_task_ns / 1000));
 
 			if (tila != 4) tila = 2;
 
@@ -370,13 +382,11 @@ void red_led_task(void *, void *, void*)
 			k_mutex_unlock(&red_mutex);
 			if (rc == 0) {
 				gpio_pin_set_dt(&red, 1);
-				printk("Red on (uart, %d ms)\n", led_time_ms);
-
+				DEBUG_PRINT("Red on (uart, %d ms)\n", led_time_ms);
 				k_msleep(led_time_ms);
 
 				gpio_pin_set_dt(&red, 0);
-				printk("Red off (uart)\n");
-
+				DEBUG_PRINT("Red off (uart)\n");
 				k_sem_give(&release_sem);
 			}
 		}
@@ -387,27 +397,25 @@ void red_led_task(void *, void *, void*)
 // Task to handle yellow LED
 void yellow_led_task(void *, void *, void*)
 {
-	printk("Yellow led thread started\n");
+	DEBUG_PRINT("Yellow led thread started\n");
 	while (true) {
 		timing_start();
 		timing_t yellow_start_time = timing_counter_get();
 		if (tila == 2) {
 			gpio_pin_set_dt(&red, 1);
 			gpio_pin_set_dt(&green, 1);
-			printk("Yellow on\n");
-
+			DEBUG_PRINT("Yellow on\n");
 			k_sleep(K_SECONDS(1));
 
 			gpio_pin_set_dt(&red, 0);
 			gpio_pin_set_dt(&green, 0);
-			printk("Yellow off\n");
-
+			DEBUG_PRINT("Yellow off\n");
 			k_sleep(K_SECONDS(1));
 
 			timing_t yellow_end_time = timing_counter_get();
 			timing_stop();
 			yellow_task_ns = timing_cycles_to_ns(timing_cycles_get(&yellow_start_time, &yellow_end_time));
-			printk("Yellow task: %u us\n", (uint32_t)(yellow_task_ns / 1000));
+			DEBUG_PRINT("Yellow task: %u us\n", (uint32_t)(yellow_task_ns / 1000));
 
 			if (tila != 4) tila = 3;
 
@@ -418,14 +426,12 @@ void yellow_led_task(void *, void *, void*)
 			if (rc == 0) {
 				gpio_pin_set_dt(&red, 1);
 				gpio_pin_set_dt(&green, 1);
-				printk("Yellow on (uart, %d ms)\n", led_time_ms);
-
+				DEBUG_PRINT("Yellow on (uart, %d ms)\n", led_time_ms);
 				k_msleep(led_time_ms);
 
 				gpio_pin_set_dt(&red, 0);
 				gpio_pin_set_dt(&green, 0);
-				printk("Yellow off (uart)\n");
-
+				DEBUG_PRINT("Yellow off (uart)\n");
 				k_sem_give(&release_sem);
 			}
 		}
@@ -436,29 +442,27 @@ void yellow_led_task(void *, void *, void*)
 // Task to handle green LED
 void green_led_task(void *, void *, void*)
 {
-	printk("Green led thread started\n");
+	DEBUG_PRINT("Green led thread started\n");
 	while (true) {
 		timing_start();
 		timing_t green_start_time = timing_counter_get();
 		if (tila == 3) {
 			gpio_pin_set_dt(&green, 1);
-			printk("Green on\n");
-
+			DEBUG_PRINT("Green on\n");
 			k_sleep(K_SECONDS(1));
 
 			gpio_pin_set_dt(&green, 0);
-			printk("Green off\n");
-
+			DEBUG_PRINT("Green off\n");
 			k_sleep(K_SECONDS(1));
 
 			timing_t green_end_time = timing_counter_get();
 			timing_stop();
 			green_task_ns = timing_cycles_to_ns(timing_cycles_get(&green_start_time, &green_end_time));
-			printk("Green task: %u us\n", (uint32_t)(green_task_ns / 1000));
+			DEBUG_PRINT("Green task: %u us\n", (uint32_t)(green_task_ns / 1000));
 
 			// Measure entire sequence
 			uint64_t total_ns = red_task_ns + yellow_task_ns + green_task_ns;
-			printk("Sequence total: %u us\n", (uint32_t)(total_ns / 1000));
+			DEBUG_PRINT("Sequence total: %u us\n", (uint32_t)(total_ns / 1000));
 
 			if (tila != 4) tila = 1;
 
@@ -468,13 +472,11 @@ void green_led_task(void *, void *, void*)
 			k_mutex_unlock(&green_mutex);
 			if (rc == 0) {
 				gpio_pin_set_dt(&green, 1);
-				printk("Green on (uart, %d ms)\n", led_time_ms);
-
+				DEBUG_PRINT("Green on (uart, %d ms)\n", led_time_ms);
 				k_msleep(led_time_ms);
 
 				gpio_pin_set_dt(&green, 0);
-				printk("Green off (uart)\n");
-
+				DEBUG_PRINT("Green off (uart)\n");
 				k_sem_give(&release_sem);
 			}
 		}
@@ -485,19 +487,17 @@ void green_led_task(void *, void *, void*)
 // Task to handle Blinking yellow LED
 void yellow_blink_task(void *, void *, void*)
 {
-	printk("Blink yellow thread started\n");
+	DEBUG_PRINT("Blink yellow thread started\n");
 	while (true) {
 		if (tila == 5) {
 			gpio_pin_set_dt(&red, 1);
 			gpio_pin_set_dt(&green, 1);
-			printk("Blink yellow on\n");
-
+			DEBUG_PRINT("Blink yellow on\n");
 			k_sleep(K_MSEC(1000));
 
 			gpio_pin_set_dt(&red, 0);
 			gpio_pin_set_dt(&green, 0);
-			printk("Blink yellow off\n");
-
+			DEBUG_PRINT("Blink yellow off\n");
 			k_sleep(K_MSEC(1000));
 		}
 		k_yield();
@@ -520,10 +520,13 @@ void uart_task(void *unused1, void *unused2, void *unused3)
 				if (uart_msg_cnt < (int)sizeof(uart_msg) - 1) {
 					uart_msg[uart_msg_cnt] = rc;
 					uart_msg_cnt++;
+				} else {
+					// Checks for oversized UART commands
+					assert(uart_msg_cnt < (int)sizeof(uart_msg) - 1);
 				}
 			} else {
 				uart_msg[uart_msg_cnt] = '\0';
-				printk("UART msg: %s\n", uart_msg);
+				DEBUG_PRINT("UART msg: %s\n", uart_msg);
 
 				// Allocate memory
 				struct data_t *buf = k_malloc(sizeof(struct data_t));
@@ -551,41 +554,64 @@ void uart_task(void *unused1, void *unused2, void *unused3)
 void dispatcher_task(void *unused1, void *unused2, void *unused3)
 {
 	while (true) {
+		// Check that sequence doesn't exceed 20 items
+		assert(sequence_length >= 0 && sequence_length <= MAX_SEQUENCE);
 		struct data_t *rec_item = k_fifo_get(&dispatcher_fifo, K_FOREVER);
+		
+		// Check that FIFO returns valid data
+		assert(rec_item != NULL);
 		char command[20];
 		memcpy(command, rec_item->msg, sizeof(command));
 		k_free(rec_item);
 
-		printk("Dispatcher: %s\n", command);
+		DEBUG_PRINT("Dispatcher: %s\n", command);
+
+		// D = toggle debug, D,1 = on, D,0 = off
+		if (strcmp(command, "D") == 0) {
+			debug_enabled = !debug_enabled;
+			printk("Debug %s\n", debug_enabled ? "ON" : "OFF");
+			continue;
+		}
+
+		int debug_value;
+		if (sscanf(command, "D,%d", &debug_value) == 1) {
+			if (debug_value == 0 || debug_value == 1) {
+				debug_enabled = (debug_value == 1);
+				printk("Debug %s\n", debug_enabled ? "ON" : "OFF");
+			} else {
+				printk("Invalid debug setting: %d (use D,0 or D,1)\n", debug_value);
+			}
+			continue;
+		}
 
 		if (tila != 4) {
-			printk("Ignored '%s': not in pause mode\n", command);
+			DEBUG_PRINT("Ignored '%s': not in pause mode\n", command);
 			continue;
 		}
 
 		if (strcmp(command, "T") == 0) {
-			printk("Repeat sequence (%d steps)\n", sequence_length);
+			DEBUG_PRINT("Repeat sequence (%d steps)\n", sequence_length);
 			if (sequence_length == 0) {
-				printk("No sequence stored\n");
+				DEBUG_PRINT("No sequence stored\n");
 				continue;
 			}
 			for (int i = 0; i < sequence_length; i++) {
 				if (tila != 4) {
-					printk("Pause ended, aborting sequence\n");
+					DEBUG_PRINT("Pause ended, aborting sequence\n");
 					break;
 				}
 				led_time_ms = sequence[i].time_ms;
 				switch (sequence[i].color) {
 				case 'R':
-					printk("Sequence: R,%d\n", led_time_ms);
+					DEBUG_PRINT("Sequence: R,%d\n", led_time_ms);
 					k_condvar_broadcast(&red_signal);
 					break;
 				case 'Y':
-					printk("Sequence: Y,%d\n", led_time_ms);
+					DEBUG_PRINT("Sequence: Y,%d\n", led_time_ms);
 					k_condvar_broadcast(&yellow_signal);
 					break;
 				case 'G':
-					printk("Sequence: G,%d\n", led_time_ms);
+					DEBUG_PRINT("Sequence: G,%d\n", led_time_ms);
 					k_condvar_broadcast(&green_signal);
 					break;
 				}
@@ -602,8 +628,10 @@ void dispatcher_task(void *unused1, void *unused2, void *unused3)
 		int time_ms;
 
 		if (sscanf(command, "%c,%d", &color, &time_ms) == 2) {
+			// Check that LED timing is valid
+			assert(time_ms > 0);
 			if (color != 'R' && color != 'Y' && color != 'G') {
-				printk("Unknown color: %c\n", color);
+				DEBUG_PRINT("Unknown color: %c\n", color);
 				continue;
 			}
 
@@ -611,9 +639,9 @@ void dispatcher_task(void *unused1, void *unused2, void *unused3)
 				sequence[sequence_length].color = color;
 				sequence[sequence_length].time_ms = time_ms;
 				sequence_length++;
-				printk("Added to sequence: %c,%d\n", color, time_ms);
+				DEBUG_PRINT("Added to sequence: %c,%d\n", color, time_ms);
 			} else {
-				printk("Sequence full!\n");
+				DEBUG_PRINT("Sequence full!\n");
 			}
 
 			led_time_ms = time_ms;
