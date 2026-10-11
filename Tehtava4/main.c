@@ -10,8 +10,8 @@
 #include <ctype.h>
 
 
-// 1. pisteen tehtävä
-// Teen myöhemmin lisäpistetiä
+// 2. pisteen tehtävä
+// Perus tehtävän lisäksi tein uusia testkeissejä
 
 // Config
 #define STACKSIZE 1024
@@ -168,6 +168,11 @@ int time_parse(char *time) {
 
 	// Calculate return value from the parsed minutes and seconds
 	seconds = values[1] * 60 + values[2];
+
+	// Sending 0 seconds is useless
+	if (seconds == 0) {
+    	return TIME_VALUE_ERROR;
+	}
 
 	return seconds;
 }
